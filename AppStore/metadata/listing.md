@@ -76,7 +76,7 @@ obsidian,daily note,journal,diary,markdown,quick capture,note,icloud,vault,times
 |---|---|
 | Support URL | https://alexmakesmeals.com (replace if preferred) |
 | Marketing URL | optional — leave blank |
-| Privacy policy URL | REQUIRED — host `privacy-policy.md` (in this folder) anywhere public, e.g. a GitHub Gist or your site |
+| Privacy policy URL | https://github.com/HighPriestCthulhu/DailyNote/blob/main/PRIVACY.md |
 
 ## App Privacy (App Store Connect questionnaire)
 

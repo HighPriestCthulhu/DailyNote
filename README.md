@@ -1,77 +1,115 @@
 # DailyNote
 
-A one-purpose iOS companion to Obsidian: launches straight into **today's daily
-note** in your iCloud-synced vault — opening it if it exists, creating it from
-your template if it doesn't. No vault indexing, no plugins, no animations.
-Obsidian stays the source of truth; this app just reads and writes the same
-markdown files.
+**Today's daily note, instantly.** A one-purpose iOS companion for markdown
+daily notes in iCloud Drive (built for Obsidian vaults, works with any folder):
+cold launch straight into today's note — keyboard up, cursor at the end —
+creating it from your template if it doesn't exist yet.
 
-- Vault: `Diary` (Obsidian iCloud container, picked once via the Files picker)
-- Daily notes: `daily_notes/YYYY/MMMM/YYYY-MMM-DD-ddd.md` (e.g. `daily_notes/2026/July/2026-Jul-16-Thu.md`)
-- Template: `daily_notes/0000.md`, `{{date:...}}` placeholders rendered exactly like Obsidian
-- Zero entitlements, zero dependencies → works fully on a **free** Apple ID
+<p>
+<img src="AppStore/screenshots/6.9-inch/01-editor-light.png" width="230" alt="Editor with live markdown styling">
+<img src="AppStore/screenshots/6.9-inch/02-markup-mode-light.png" width="230" alt="Markup mode: rendered but editable">
+<img src="AppStore/screenshots/6.9-inch/03-markup-mode-dark.png" width="230" alt="Dark mode">
+</p>
 
-## Install on your iPhone
+## Why
 
-1. On the iPhone: **Settings ▸ Privacy & Security ▸ Developer Mode** → on (reboots the phone). This only needs doing once.
-2. Open `DailyNote.xcodeproj` in Xcode. Plug in the iPhone (first time: tap "Trust" on the phone).
-3. Select the **DailyNote** scheme and your iPhone as the destination, press **Run** (⌘R). The scheme runs the **Release** build for full typing speed; switch the scheme's Run configuration back to Debug if you ever need breakpoints.
-   - Signing is already set to your personal team (`4MDYDGTK35`). If Xcode complains, open the target's *Signing & Capabilities* tab and re-select your team.
-4. First launch will be blocked: on the phone go to **Settings ▸ General ▸ VPN & Device Management**, trust your developer certificate, then launch again.
-5. In the app, tap **Choose Vault Folder** → **Browse ▸ Obsidian ▸ Diary** → **Open**. That's the only setup; every future launch goes straight into today's note.
+Full-featured notes apps index, sync, and animate before you can type. If you
+just want to capture a thought into today's note, that launch delay is where
+the thought dies. DailyNote does exactly one thing and does it in well under a
+second — and it works on the *same markdown files*, so your main app (Obsidian
+or anything else) stays the source of truth.
 
-### Free vs paid Apple ID
+## Features
 
-- **Free**: the app's signature expires after **7 days** — it just stops launching. Plug the phone in and press Run in Xcode again (Window ▸ Devices ▸ "Connect via network" makes this cable-free). Your data and the vault grant survive re-signing.
-- **Paid ($99/yr)**: signature lasts 1 year; no weekly ritual.
+- **Instant open** — the last saved content appears the moment the app
+  launches; the file is reconciled with iCloud in the background. Unsaved
+  typing always survives, and if both you and another device appended to the
+  note, the edits are merged.
+- **Template-based creation** — if today's note doesn't exist, it's created
+  with your daily-note template, `{{date:...}}` placeholders rendered exactly
+  as Obsidian renders them (moment.js tokens, including the `YYYY`/`DD`
+  ICU pitfalls handled correctly).
+- **Live markdown styling** while you type: headings, bold/italic/strike,
+  `code`, [[wikilinks]], links, #tags, lists, checkboxes, quotes, dimmed YAML
+  frontmatter. Styling only — the file bytes are exactly what you typed.
+- **Markup mode** (book toggle) — renders the markdown in place, Obsidian
+  Live-Preview style: syntax concealed, `[[target|alias]]` shows the alias,
+  headings sized, links tappable-looking — while staying fully editable. The
+  paragraph under the cursor reveals its raw markdown.
+- **Smart lists** — Return continues `-`/`*`/`+` bullets, numbered lists
+  (auto-increment), and checkboxes (new items unchecked); Return on an empty
+  item exits the list.
+- **Line timestamps** (clock toggle) — every Return starts the new line with
+  `-[HH:MM] `, for logging a day as it happens.
+- **Sync-safe** — all file I/O goes through `NSFileCoordinator`; the app
+  never overwrites a note that already exists elsewhere, watches for external
+  changes while open, and autosaves on every pause and app switch.
+- **No animations, no accounts, no network code.** See [PRIVACY.md](PRIVACY.md).
 
-## Using it
+## Requirements
 
-- Launches with the keyboard up and the cursor at the end of the note (toggle in the gear menu) — type immediately.
-- Markdown renders live in the editor (Obsidian-style): headings, **bold**, *italic*, ~~strikethrough~~, `code`, [[wikilinks]], links, #tags, lists/checkboxes, quotes, dimmed frontmatter. The underlying text is untouched — styling only.
-- **Markup mode** (book toggle): renders the markdown in place — syntax concealed, aliases shown for `[[target|alias]]` links — while staying fully editable. The paragraph under the cursor reveals its raw markdown, like Obsidian's Live Preview. Concealment is display-only (null glyphs); the file bytes never change.
-- **Instant open**: the last saved content of today's note is cached locally and shown the moment the app launches; the coordinated iCloud open reconciles in the background (your unsaved typing always wins; if both you and another device appended, the two are merged).
-- **Reading mode**: the square book toggle renders the note like Obsidian's reading view — syntax hidden, real bullets/checkboxes, styled headings, tappable links, `[[target|alias]]` shows the alias. Read-only; toggle back to edit.
-- **Smart lists**: Return continues `- ` / `* ` / `+ ` bullets, checkboxes (always unchecked), and numbered lists (auto-incremented); Return on an empty item removes the marker and exits the list. All auto-inserts go through the text-input system, so undo stays consistent.
-- **Line timestamps**: the square clock toggle in the top bar stamps every new line with `-[HH:MM] ` as you press Return (24-hour). List continuation takes precedence on list lines; pastes are untouched. The setting persists across launches.
-- **⤓ button** (bottom-right): jump to the end of the note for quick capture.
-- Saves automatically ~1.5 s after you stop typing, and immediately when you leave the app.
-- Edits made on other devices appear when you return to the app (as soon as iCloud has synced them). If both sides edited, the most recent save wins.
-- Past midnight, returning to the app rolls over to the new day's note automatically.
-- Gear menu: reload from disk, change vault folder.
+- iOS 17+, Xcode 16+
+- A folder of markdown daily notes reachable through the Files app (an
+  Obsidian vault in iCloud Drive is the canonical case)
 
-## Behavior notes
+## Install
 
-- "Not found" vs "can't read" is handled strictly: offline with an undownloaded note shows an error + Retry — it will never overwrite a real note with a fresh template.
-- If Obsidian created today's note but it hasn't synced down yet when DailyNote first opens, iCloud may briefly show a sync conflict for that one file; creation happens at most once per day and iCloud resolves it. In practice open Obsidian later and everything is merged by iCloud sync timing.
-- If the template `daily_notes/0000.md` is unreadable, a built-in byte-identical copy is used and the top bar shows "built-in template".
-- If saving fails (iCloud full etc.), a red "not saved" badge appears; the text is retried on your next keystroke/app switch and also stashed in app storage as a rescue copy.
+1. Clone, open `DailyNote.xcodeproj`, and select your own team under
+   *Signing & Capabilities* (any free or paid Apple ID works — the app needs
+   zero entitlements).
+2. Run to your iPhone. On a free Apple ID the app must be re-run from Xcode
+   every 7 days; a paid membership extends that to a year.
+3. On first launch, tap **Choose Vault Folder** and pick the folder that
+   contains your `daily_notes` directory (e.g. your vault root in
+   Files ▸ Obsidian). That's the only setup.
 
-## App Store submission
+## Adapting to your vault
 
-The `AppStore/` folder holds a complete review-ready package: listing metadata,
-privacy policy text, reviewer test instructions, the 1024px icon, and a full
-6.9-inch screenshot set. Start at `AppStore/SUBMISSION-CHECKLIST.md`.
-Requires a paid Apple Developer membership.
+The daily-note layout is currently defined by constants in
+[`MomentFormat.swift`](DailyNote/MomentFormat.swift) (`VaultConfig`):
+
+| Constant | Default | Meaning |
+|---|---|---|
+| `dailyNotesFolder` | `daily_notes` | Folder inside the vault |
+| `dailyNoteFormat` | `YYYY/MMMM/YYYY-MMM-DD-ddd` | Note path/name (moment tokens; `/` nests folders) |
+| `templatePath` | `daily_notes/0000.md` | Template file, with `{{date:...}}` placeholders |
+
+Match these to your daily-notes settings (in Obsidian:
+`.obsidian/daily-notes.json`) and rebuild. Reading that config file
+automatically is on the roadmap.
+
+## How it stays fast
+
+- Keystrokes never enter SwiftUI: text lives in unobserved model state and
+  the `UITextView` is the source of truth while editing.
+- Markdown styling is attribute-only work scoped to the edited paragraph;
+  markup-mode concealment is a custom attribute rendered as null glyphs by an
+  `NSLayoutManager` delegate — the text is never transformed for display.
+- Launch shows a locally cached copy of today's note immediately and lets the
+  (potentially slow) iCloud coordinated read finish in the background.
 
 ## Development
 
-Sources live in `DailyNote/` (filesystem-synchronized group — add a file to the
-folder and Xcode picks it up). Pure-logic pieces (`MomentFormat`,
-`VaultFileService`) are plain Foundation and can be tested from the Mac CLI:
+Sources live in `DailyNote/` as a filesystem-synchronized group — add a file
+to the folder and Xcode picks it up. The pure-logic pieces (`MomentFormat`,
+`VaultFileService`) are Foundation-only and unit-testable from the command
+line on a Mac:
 
 ```sh
-swiftc -o /tmp/t DailyNote/MomentFormat.swift DailyNote/VaultFileService.swift <test-main.swift> && /tmp/t
+swiftc -o /tmp/t DailyNote/MomentFormat.swift DailyNote/VaultFileService.swift your-test-main.swift && /tmp/t
 ```
 
-Simulator build (note: keep derived data off iCloud-synced folders — building
-with derived data inside `~/Documents` fails with a build-database disk I/O error):
+A DEBUG-only launch argument `--test-vault <path>` bypasses the folder picker
+and uses a local directory as the vault — handy for simulator smoke tests:
 
 ```sh
-xcodebuild -project DailyNote.xcodeproj -scheme DailyNote \
-  -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath /tmp/dailynote-dd CODE_SIGNING_ALLOWED=NO build
+xcrun simctl launch <sim> com.alex.dailynote --test-vault /path/to/fake/vault
 ```
 
-Debug-only launch argument `--test-vault <path>` bypasses the folder picker and
-uses a local folder as the vault (used for simulator smoke tests).
+Tip: keep `xcodebuild` derived data outside iCloud-synced folders
+(`-derivedDataPath /tmp/...`), or the build database can fail with disk I/O
+errors.
+
+## License
+
+[MIT](LICENSE)

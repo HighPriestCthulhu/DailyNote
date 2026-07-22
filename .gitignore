@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+Icon?
+
+# Xcode
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.moved-aside
+
+# Personal submission workflow — not part of the public project
+AppStore/SUBMISSION-CHECKLIST.md
