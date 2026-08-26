@@ -23,6 +23,10 @@ in iCloud Drive (e.g. with the Obsidian app), but it works with any folder.
    - **Gear menu** — cursor preference, reload, change folder.
 5. Markdown demo: type things like `## Heading`, `**bold**`, `- item`
    (press Return to see list continuation), `- [ ] task`.
+6. Timeline: with at least one earlier daily note in the folder, pull down
+   past the top of the note and release — previous days appear above today,
+   read-only, and keep loading as you scroll up. The top-left arrow button
+   returns to the single-day view.
 
 ## Privacy / permissions
 

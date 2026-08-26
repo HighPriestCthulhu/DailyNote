@@ -24,6 +24,13 @@ final class AppModel {
     /// into `noteText`. The editor re-reads `noteText` only when this moves.
     private(set) var noteGeneration = 0
 
+    /// Timeline mode: previous days are visible above today's note.
+    /// Drives only the top-left reset button — scrolling and prepends never
+    /// touch observable state.
+    private(set) var historyModeActive = false
+    /// Bumped by the reset button; the editor collapses when it moves.
+    private(set) var historyResetToken = 0
+
     /// Deliberately outside observation: keystrokes update this via
     /// `editorChangedText` without invalidating any SwiftUI view.
     @ObservationIgnored private(set) var noteText: String = ""
@@ -140,6 +147,9 @@ final class AppModel {
             let syncing = VaultFileService.isLikelyNotDownloaded(fileURL)
             state = .loading(message: syncing ? "Syncing from iCloud…" : "Opening today's note…")
             detachPresenter()
+            // A different note is loading (day rollover, vault re-pick): the
+            // timeline dies with the editor, so the reset button must too.
+            historyModeActive = false
         }
         openSequence += 1
         let sequence = openSequence
@@ -236,6 +246,30 @@ final class AppModel {
             markDirty()
         }
         // Otherwise: unsaved edits win, as everywhere else in the app.
+    }
+
+    // MARK: - Timeline (history) mode
+
+    func historyRevealed() {
+        if !historyModeActive { historyModeActive = true }
+    }
+
+    func historyCollapsed() {
+        if historyModeActive { historyModeActive = false }
+    }
+
+    func requestHistoryReset() {
+        historyResetToken += 1
+        historyModeActive = false
+    }
+
+    /// Reads the next batch of previous days off-main. Blocking coordinated
+    /// reads live inside; the editor calls this from its scroll handling.
+    func loadHistoryBatch(before date: Date) async -> VaultFileService.HistoryBatch? {
+        guard let vault = vaultURL else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            VaultFileService.readHistory(vault: vault, endingAt: date)
+        }.value
     }
 
     // MARK: - Folder picking

@@ -41,6 +41,13 @@ or anything else) stays the source of truth.
   item exits the list.
 - **Line timestamps** (clock toggle) — every Return starts the new line with
   `-[HH:MM] `, for logging a day as it happens.
+- **Timeline** — pull down (refresh-style) to reveal previous days above
+  today's note, then scroll back through your whole journal; older days load
+  as you go, gaps are skipped, and each day sits under a `═══ date ═══`
+  header with its frontmatter hidden. Previous days are strictly read-only
+  (selectable/copyable, never editable); today stays editable at the bottom.
+  The top-left button returns to the single-day view. The reveal glide is the
+  app's single animation.
 - **Sync-safe** — all file I/O goes through `NSFileCoordinator`; the app
   never overwrites a note that already exists elsewhere, watches for external
   changes while open, and autosaves on every pause and app switch.

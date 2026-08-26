@@ -1,19 +1,20 @@
 import SwiftUI
 import UIKit
 
-/// Plain UITextView wrapper with live markdown styling and an optional
-/// Obsidian-Live-Preview "markup mode". TextKit 1, no animations.
+/// Plain UITextView wrapper with live markdown styling, an optional
+/// Obsidian-Live-Preview "markup mode", and a pull-down timeline of previous
+/// days. TextKit 1; the only sanctioned animation is the timeline reveal.
 ///
-/// Markup mode never swaps views or mutates text: marker characters carry a
-/// conceal attribute that the NSLayoutManager delegate renders as null
-/// glyphs (invisible). The paragraph under the caret is exempt, so the line
-/// being edited shows raw markdown. Toggling modes, moving the caret, and
-/// typing are all attribute-only restyles scoped to one or two paragraphs.
+/// TIMELINE MODE: pulling down past a threshold prepends previous days into
+/// the same text view — [older days][═══ header ═══][yesterday][═══ today ═══]
+/// [today's live text]. `historyBoundary` (UTF-16 offset of today's text)
+/// gates all editing; everything before it is read-only. The model only ever
+/// sees today's suffix, so saves/cache/sync are untouched by the timeline.
 ///
 /// Performance contract: typing never re-enters SwiftUI. Keystrokes flow
 /// UITextView → `onTextChange` (into unobserved model state); this view only
-/// re-reads `text` when `generation` changes (a different document was
-/// loaded).
+/// re-reads `text` when `generation` changes. Timeline prepends are pure
+/// UIKit — they touch no observable state.
 struct PlainTextEditor: UIViewRepresentable {
     let text: String
     let generation: Int
@@ -26,6 +27,15 @@ struct PlainTextEditor: UIViewRepresentable {
     let autoFocus: Bool
     let onAutoFocused: () -> Void
 
+    // Timeline mode
+    let noteIdentity: String
+    let noteDate: Date
+    let noteTitle: String
+    let historyResetToken: Int
+    let onHistoryRevealed: () -> Void
+    let onHistoryCollapsed: () -> Void
+    let loadHistoryBatch: (Date) async -> VaultFileService.HistoryBatch?
+
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -35,6 +45,10 @@ struct PlainTextEditor: UIViewRepresentable {
 
     static func newlineTimestamp(at date: Date = Date()) -> String {
         "\n-[" + timeFormatter.string(from: date) + "] "
+    }
+
+    static func dayHeader(for title: String) -> String {
+        "═══ " + title + " ═══\n"
     }
 
     func makeCoordinator() -> Coordinator {
@@ -61,28 +75,46 @@ struct PlainTextEditor: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        context.coordinator.parent = self
+        let coordinator = context.coordinator
+        coordinator.parent = self
 
-        if context.coordinator.lastGeneration != generation {
-            context.coordinator.lastGeneration = generation
-            let selection = textView.selectedRange
-            let wasAtEnd = selection.location >= (textView.text as NSString).length
-            textView.text = text
-            let length = (text as NSString).length
-            // A caret at the end (the capture position) stays at the end when
-            // reconciled content arrives; otherwise clamp in place.
-            textView.selectedRange = NSRange(location: wasAtEnd ? length : min(selection.location, length),
-                                             length: 0)
-            context.coordinator.fullRestyle(textView)
+        // A different document (day rollover, vault re-pick) re-anchors the
+        // timeline; collapse before the plain load below runs.
+        if coordinator.lastNoteIdentity != noteIdentity {
+            coordinator.lastNoteIdentity = noteIdentity
+            coordinator.collapseHistory(textView)
         }
 
-        if context.coordinator.lastMarkupMode != markupMode {
-            context.coordinator.lastMarkupMode = markupMode
-            context.coordinator.fullRestyle(textView)
+        if coordinator.lastGeneration != generation {
+            coordinator.lastGeneration = generation
+            if coordinator.historyActive {
+                coordinator.swapTodaySuffix(textView, with: text)
+            } else {
+                let selection = textView.selectedRange
+                let wasAtEnd = selection.location >= (textView.text as NSString).length
+                textView.text = text
+                let length = (text as NSString).length
+                // A caret at the end (the capture position) stays at the end when
+                // reconciled content arrives; otherwise clamp in place.
+                textView.selectedRange = NSRange(location: wasAtEnd ? length : min(selection.location, length),
+                                                 length: 0)
+                coordinator.fullRestyle(textView)
+            }
+            coordinator.lastGoodSuffix = text
         }
 
-        if autoFocus, !context.coordinator.didInitialFocus {
-            context.coordinator.didInitialFocus = true
+        if coordinator.lastResetToken != historyResetToken {
+            coordinator.lastResetToken = historyResetToken
+            coordinator.collapseHistory(textView)
+        }
+
+        if coordinator.lastMarkupMode != markupMode {
+            coordinator.lastMarkupMode = markupMode
+            coordinator.fullRestyle(textView)
+        }
+
+        if autoFocus, !coordinator.didInitialFocus {
+            coordinator.didInitialFocus = true
             let goToEnd = startAtEnd
             let focused = onAutoFocused
             DispatchQueue.main.async {
@@ -93,6 +125,17 @@ struct PlainTextEditor: UIViewRepresentable {
                 focused()
             }
         }
+
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--reveal-history"),
+           !coordinator.didAutoReveal, !text.isEmpty {
+            coordinator.didAutoReveal = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak coordinator, weak textView] in
+                guard let coordinator, let textView else { return }
+                coordinator.debugTriggerReveal(textView)
+            }
+        }
+        #endif
     }
 
     private static func moveCaretToEnd(_ textView: UITextView) {
@@ -106,14 +149,31 @@ struct PlainTextEditor: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate, NSLayoutManagerDelegate {
         var parent: PlainTextEditor
         var didInitialFocus = false
+        var didAutoReveal = false
         var lastGeneration = Int.min
         var lastMarkupMode: Bool
+        var lastResetToken: Int
+        var lastNoteIdentity: String
+        /// Mirror of the model's last known good today-text, used to recover
+        /// if the boundary sentinel check ever fails.
+        var lastGoodSuffix = ""
         let highlighter = MarkdownHighlighter()
 
+        // Timeline state — all unobserved, all UTF-16 offsets.
+        private(set) var historyActive = false
+        private var historyBoundary = 0
+        private var boundarySentinel = ""
+        private var nextHistoryDate: Date?
+        private var reachedHistoryEnd = false
+        private var historyKnownEmpty = false
+        private var isLoadingBatch = false
+        private var isRevealAnimating = false
+        private var historyEpoch = 0
+        /// Ownership token: only the request that set `isLoadingBatch` may
+        /// clear it, so a stale completion can't unlock a newer in-flight load.
+        private var loadToken = 0
+
         private var lastActiveParagraph = NSRange(location: 0, length: 0)
-        /// Whether the last full pass left concealed glyphs — toggling markup
-        /// OFF still needs one invalidation to regenerate them.
-        private var lastPassConcealed = false
         private weak var textView: UITextView?
         private var keyboardObservers: [NSObjectProtocol] = []
         private var fullHighlightWork: DispatchWorkItem?
@@ -121,6 +181,8 @@ struct PlainTextEditor: UIViewRepresentable {
         init(_ parent: PlainTextEditor) {
             self.parent = parent
             self.lastMarkupMode = parent.markupMode
+            self.lastResetToken = parent.historyResetToken
+            self.lastNoteIdentity = parent.noteIdentity
         }
 
         // MARK: Styling
@@ -136,11 +198,9 @@ struct PlainTextEditor: UIViewRepresentable {
             lastActiveParagraph = active
             highlighter.highlightDocument(textView.textStorage,
                                           conceal: parent.markupMode,
-                                          activeParagraph: active)
-            if parent.markupMode || lastPassConcealed {
-                invalidateGlyphs(textView, in: NSRange(location: 0, length: textView.textStorage.length))
-            }
-            lastPassConcealed = parent.markupMode
+                                          activeParagraph: active,
+                                          frontmatterOffset: historyBoundary)
+            invalidateGlyphs(textView, in: NSRange(location: 0, length: textView.textStorage.length))
         }
 
         /// Restyle the paragraphs around `range`; in markup mode also
@@ -148,7 +208,8 @@ struct PlainTextEditor: UIViewRepresentable {
         private func restyle(_ textView: UITextView, around range: NSRange, active: NSRange) {
             highlighter.highlightParagraphs(textView.textStorage, around: range,
                                             conceal: parent.markupMode,
-                                            activeParagraph: active)
+                                            activeParagraph: active,
+                                            frontmatterOffset: historyBoundary)
             if parent.markupMode {
                 let ns = textView.text as NSString
                 invalidateGlyphs(textView, in: ns.paragraphRange(
@@ -195,17 +256,27 @@ struct PlainTextEditor: UIViewRepresentable {
             return glyphRange.length
         }
 
-        // MARK: Active-line reveal
+        // MARK: Selection — read-only guard + active-line reveal
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            // Zero-length carets may never rest in history: this blocks
+            // marked-text (CJK) and dictation, which bypass shouldChangeTextIn.
+            // Ranged selections are allowed so history can be copied.
+            if historyActive {
+                let selection = textView.selectedRange
+                if selection.length == 0, selection.location < historyBoundary {
+                    textView.selectedRange = NSRange(location: historyBoundary, length: 0)
+                    return // re-entrant call lands past the boundary
+                }
+            }
+
             guard parent.markupMode else { return }
             let newActive = activeParagraph(textView)
             guard newActive != lastActiveParagraph else { return }
             let ns = textView.text as NSString
-            // The departed active range can span several paragraphs (drag
-            // selections) — re-conceal ALL of it, then reveal the new range.
             let old = MarkdownHighlighter.clamped(lastActiveParagraph, to: ns.length)
             lastActiveParagraph = newActive
+            // Two scoped restyles: re-conceal the departed range, reveal the new one.
             restyle(textView, around: old, active: newActive)
             restyle(textView, around: newActive, active: newActive)
         }
@@ -221,6 +292,10 @@ struct PlainTextEditor: UIViewRepresentable {
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange,
                       replacementText text: String) -> Bool {
+            // History is immutable: refuse any change that touches it.
+            // (Insertion exactly at the boundary is the start of today — legal.)
+            if historyActive, range.location < historyBoundary { return false }
+
             // Only a typed Return gets special handling — pastes pass through.
             guard text == "\n" else { return true }
 
@@ -317,12 +392,31 @@ struct PlainTextEditor: UIViewRepresentable {
         // MARK: Text changes
 
         func textViewDidChange(_ textView: UITextView) {
-            parent.onTextChange(textView.text)
+            let ns = textView.text as NSString
+
+            if historyActive {
+                // Sentinel failsafe: today's header must still sit intact just
+                // before the boundary. If anything slipped past the guards,
+                // recover instead of ever saving a mis-sliced suffix.
+                let sentinel = boundarySentinel as NSString
+                let ok = historyBoundary >= sentinel.length && ns.length >= historyBoundary
+                    && ns.substring(with: NSRange(location: historyBoundary - sentinel.length,
+                                                  length: sentinel.length)) == boundarySentinel
+                guard ok else {
+                    emergencyRestore(textView)
+                    return
+                }
+                let suffix = ns.substring(from: historyBoundary)
+                lastGoodSuffix = suffix
+                parent.onTextChange(suffix)
+            } else {
+                lastGoodSuffix = textView.text
+                parent.onTextChange(textView.text)
+            }
 
             // Cheap per-keystroke styling: the current paragraph, plus the
             // departed range when the caret crossed a line boundary (Return)
             // or a selection was replaced, so it re-conceals in markup mode.
-            let ns = textView.text as NSString
             let newActive = activeParagraph(textView)
             let old = MarkdownHighlighter.clamped(lastActiveParagraph, to: ns.length)
             if parent.markupMode, old != newActive {
@@ -332,15 +426,257 @@ struct PlainTextEditor: UIViewRepresentable {
             restyle(textView, around: newActive, active: newActive)
             textView.typingAttributes = MarkdownHighlighter.baseAttributes
 
-            // …and a debounced full pass for multi-line constructs
-            // (frontmatter, pasted blocks).
+            // Debounced wider pass for multi-line constructs (frontmatter,
+            // pasted blocks) — scoped to today's suffix so months of loaded
+            // history never join the per-pause restyle.
             fullHighlightWork?.cancel()
             let work = DispatchWorkItem { [weak self, weak textView] in
                 guard let self, let textView else { return }
-                self.fullRestyle(textView)
+                if self.historyActive {
+                    let length = (textView.text as NSString).length
+                    let suffix = NSRange(location: self.historyBoundary,
+                                         length: max(0, length - self.historyBoundary))
+                    self.restyle(textView, around: suffix, active: self.activeParagraph(textView))
+                } else {
+                    self.fullRestyle(textView)
+                }
             }
             fullHighlightWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        }
+
+        /// The boundary sentinel failed — history bookkeeping can no longer be
+        /// trusted. Drop the timeline and restore the last known good today.
+        private func emergencyRestore(_ textView: UITextView) {
+            historyEpoch += 1
+            historyActive = false
+            historyBoundary = 0
+            nextHistoryDate = nil
+            reachedHistoryEnd = false
+            isLoadingBatch = false
+            isRevealAnimating = false
+            fullHighlightWork?.cancel()
+            UIView.performWithoutAnimation {
+                textView.text = lastGoodSuffix
+                textView.undoManager?.removeAllActions()
+                let end = NSRange(location: (lastGoodSuffix as NSString).length, length: 0)
+                textView.selectedRange = end
+                fullRestyle(textView)
+                textView.scrollRangeToVisible(end)
+            }
+            parent.onHistoryCollapsed()
+        }
+
+        // MARK: Timeline — reveal, prepend, collapse
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            guard let textView = scrollView as? UITextView else { return }
+            let rest = -textView.adjustedContentInset.top
+            // Checked at finger-lift so a momentum fling that rubber-bands off
+            // the top can never trigger a reveal.
+            if !historyActive, !historyKnownEmpty, !isLoadingBatch,
+               textView.contentOffset.y < rest - 72 {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                startBatchLoad(textView, isFirstReveal: true)
+            }
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard historyActive, !isLoadingBatch, !reachedHistoryEnd, !isRevealAnimating,
+                  nextHistoryDate != nil,
+                  let textView = scrollView as? UITextView else { return }
+            let rest = -textView.adjustedContentInset.top
+            if textView.contentOffset.y < rest + 2 * textView.bounds.height {
+                startBatchLoad(textView, isFirstReveal: false)
+            }
+        }
+
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+            isRevealAnimating = false
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            // A grab mid-glide interrupts the reveal animation without firing
+            // scrollViewDidEndScrollingAnimation — clear the flag here so
+            // prefetch isn't permanently disabled.
+            isRevealAnimating = false
+        }
+
+        #if DEBUG
+        func debugTriggerReveal(_ textView: UITextView) {
+            guard !historyActive else { return }
+            startBatchLoad(textView, isFirstReveal: true)
+        }
+        #endif
+
+        private func startBatchLoad(_ textView: UITextView, isFirstReveal: Bool) {
+            guard !isLoadingBatch else { return }
+            // Never restructure the document mid-IME-composition: UITextView's
+            // marked-text bookkeeping is not shifted by raw storage edits, and
+            // a stale marked range would write into history.
+            guard textView.markedTextRange == nil else { return }
+            let before: Date
+            if isFirstReveal {
+                guard let yesterday = Calendar.current.date(byAdding: .day, value: -1,
+                                                            to: parent.noteDate) else { return }
+                before = yesterday
+            } else {
+                guard let next = nextHistoryDate else { return }
+                before = next
+            }
+            isLoadingBatch = true
+            loadToken += 1
+            let token = loadToken
+            let epoch = historyEpoch
+            let load = parent.loadHistoryBatch
+            Task { @MainActor [weak self, weak textView] in
+                let batch = await load(before)
+                guard let self else { return }
+                // Only the owner of the in-flight flag may clear it.
+                guard self.loadToken == token else { return }
+                self.isLoadingBatch = false
+                guard let textView, self.historyEpoch == epoch, let batch else { return }
+                // Composition started while the batch was loading: drop it;
+                // nextHistoryDate is untouched, so the next scroll retries.
+                guard textView.markedTextRange == nil else { return }
+                self.nextHistoryDate = batch.nextDate
+                self.reachedHistoryEnd = batch.reachedEnd
+                if batch.days.isEmpty {
+                    if isFirstReveal { self.historyKnownEmpty = true } // nothing to reveal
+                    return
+                }
+                self.prepend(batch.days, into: textView, isFirstReveal: isFirstReveal)
+            }
+        }
+
+        private func prepend(_ days: [VaultFileService.HistoryDay], into textView: UITextView,
+                             isFirstReveal: Bool) {
+            var chunk = ""
+            for day in days {
+                chunk += PlainTextEditor.dayHeader(for: day.title) + day.body + "\n\n"
+            }
+            if isFirstReveal {
+                let todayHeader = PlainTextEditor.dayHeader(for: parent.noteTitle)
+                chunk += todayHeader
+                let headerNS = todayHeader as NSString
+                boundarySentinel = headerNS.substring(from: max(0, headerNS.length - 24))
+                historyActive = true
+                parent.onHistoryRevealed()
+            }
+
+            fullHighlightWork?.cancel()
+            let chunkLength = (chunk as NSString).length
+            UIView.performWithoutAnimation {
+                let oldOffset = textView.contentOffset
+                // Shift bookkeeping BEFORE the selection moves so the
+                // selection-change callback sees consistent state.
+                lastActiveParagraph.location += chunkLength
+                textView.textStorage.replaceCharacters(in: NSRange(location: 0, length: 0), with: chunk)
+                historyBoundary += chunkLength
+                var selection = textView.selectedRange
+                selection.location += chunkLength
+                textView.selectedRange = selection
+                textView.undoManager?.removeAllActions()
+
+                let prepended = NSRange(location: 0, length: chunkLength)
+                highlighter.highlightParagraphs(textView.textStorage, around: prepended,
+                                                conceal: parent.markupMode,
+                                                activeParagraph: lastActiveParagraph,
+                                                frontmatterOffset: historyBoundary)
+                if parent.markupMode { invalidateGlyphs(textView, in: prepended) }
+
+                // Pixel-stable compensation: measure the prepended height and
+                // move the offset by exactly that much.
+                let layoutManager = textView.layoutManager
+                let glyphs = layoutManager.glyphRange(forCharacterRange: prepended,
+                                                      actualCharacterRange: nil)
+                layoutManager.ensureLayout(forGlyphRange: glyphs)
+                textView.layoutIfNeeded()
+                let height = ceil(layoutManager.boundingRect(forGlyphRange: glyphs,
+                                                             in: textView.textContainer).maxY)
+                // Clamp: direct contentOffset assignment doesn't, and a short
+                // document would otherwise park in an invalid offset that
+                // jumps on the next layout pass.
+                let rest = -textView.adjustedContentInset.top
+                let maxOffset = max(rest, textView.contentSize.height
+                                          + textView.adjustedContentInset.bottom
+                                          - textView.bounds.height)
+                let target = min(max(oldOffset.y + height, rest), maxOffset)
+                textView.contentOffset = CGPoint(x: oldOffset.x, y: target)
+            }
+
+            if isFirstReveal {
+                // The one sanctioned animation: glide up to peek the tail of
+                // yesterday and its header — never past the top rest position.
+                let rest = -textView.adjustedContentInset.top
+                let available = textView.contentOffset.y - rest
+                let reveal = min(min(160, 0.45 * textView.bounds.height), max(0, available))
+                if reveal > 1 {
+                    isRevealAnimating = true
+                    textView.setContentOffset(CGPoint(x: 0, y: textView.contentOffset.y - reveal),
+                                              animated: true)
+                }
+            }
+        }
+
+        func collapseHistory(_ textView: UITextView) {
+            // Tracking resets even before the first prepend has landed: an
+            // in-flight first-reveal batch for the old note must never prepend
+            // onto the new one, and a stale "no history" verdict must not
+            // survive a note change.
+            historyEpoch += 1
+            loadToken += 1
+            isLoadingBatch = false
+            isRevealAnimating = false
+            nextHistoryDate = nil
+            reachedHistoryEnd = false
+            historyKnownEmpty = false
+            guard historyActive else { return }
+            fullHighlightWork?.cancel()
+            historyActive = false
+            let boundary = historyBoundary
+            historyBoundary = 0
+            boundarySentinel = ""
+            UIView.performWithoutAnimation {
+                textView.textStorage.replaceCharacters(in: NSRange(location: 0, length: boundary),
+                                                       with: "")
+                let length = (textView.text as NSString).length
+                let shifted = textView.selectedRange.location - boundary
+                textView.selectedRange = NSRange(location: min(max(0, shifted), length), length: 0)
+                textView.undoManager?.removeAllActions()
+                fullRestyle(textView)
+                textView.contentOffset = CGPoint(x: 0, y: -textView.adjustedContentInset.top)
+            }
+            parent.onHistoryCollapsed()
+        }
+
+        /// Generation reload while the timeline is open and the note identity
+        /// is unchanged (reconcile, external edit, reload menu): swap only
+        /// today's suffix, keep the boundary and the reader's scroll position.
+        func swapTodaySuffix(_ textView: UITextView, with newText: String) {
+            fullHighlightWork?.cancel()
+            if textView.markedTextRange != nil {
+                // External reload wins over an in-flight IME composition; a
+                // stale marked range across a suffix swap would edit history.
+                textView.unmarkText()
+            }
+            let ns = textView.text as NSString
+            let oldTotal = ns.length
+            let selection = textView.selectedRange
+            let wasAtEnd = selection.location >= oldTotal
+            let suffixRange = NSRange(location: historyBoundary,
+                                      length: max(0, oldTotal - historyBoundary))
+            UIView.performWithoutAnimation {
+                textView.textStorage.replaceCharacters(in: suffixRange, with: newText)
+                let newTotal = (textView.text as NSString).length
+                let caret = wasAtEnd ? newTotal
+                    : min(max(historyBoundary, selection.location), newTotal)
+                textView.selectedRange = NSRange(location: caret, length: 0)
+                textView.undoManager?.removeAllActions()
+                let newSuffix = NSRange(location: historyBoundary,
+                                        length: max(0, newTotal - historyBoundary))
+                restyle(textView, around: newSuffix, active: activeParagraph(textView))
+            }
         }
 
         // MARK: Keyboard insets
@@ -372,7 +708,21 @@ struct PlainTextEditor: UIViewRepresentable {
             let overlap = max(0, textView.bounds.maxY - keyboardInView.minY)
             textView.contentInset.bottom = overlap
             textView.verticalScrollIndicatorInsets.bottom = overlap
-            textView.scrollRangeToVisible(textView.selectedRange)
+            // Don't yank a history reader back to the caret on keyboard frame
+            // changes; only follow the caret when it's already on screen (or
+            // the timeline is closed — the original behavior). Never fight an
+            // active drag: interactive keyboard dismissal mid-pull would
+            // otherwise cancel the reveal gesture.
+            if !(textView.isTracking || textView.isDragging),
+               !historyActive || caretIsVisible(textView) {
+                textView.scrollRangeToVisible(textView.selectedRange)
+            }
+        }
+
+        private func caretIsVisible(_ textView: UITextView) -> Bool {
+            guard let position = textView.selectedTextRange?.end else { return false }
+            let caretRect = textView.caretRect(for: position)
+            return textView.bounds.inset(by: textView.adjustedContentInset).intersects(caretRect)
         }
 
         deinit {

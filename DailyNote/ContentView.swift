@@ -53,13 +53,33 @@ struct ContentView: View {
                             timestampNewLines: timestampLines,
                             markupMode: markupMode,
                             autoFocus: model.editorNeedsInitialFocus,
-                            onAutoFocused: { model.editorNeedsInitialFocus = false })
+                            onAutoFocused: { model.editorNeedsInitialFocus = false },
+                            noteIdentity: model.noteURL?.path ?? "",
+                            noteDate: model.noteDate ?? Date(),
+                            noteTitle: model.noteTitle,
+                            historyResetToken: model.historyResetToken,
+                            onHistoryRevealed: { model.historyRevealed() },
+                            onHistoryCollapsed: { model.historyCollapsed() },
+                            loadHistoryBatch: { await model.loadHistoryBatch(before: $0) })
                 .ignoresSafeArea(.keyboard, edges: .bottom)
         }
     }
 
     private var topBar: some View {
         HStack(spacing: 8) {
+            // Timeline reset: back to the single-day view.
+            if model.historyModeActive {
+                Button {
+                    model.requestHistoryReset()
+                } label: {
+                    Image(systemName: "arrow.down.to.line")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 28, height: 28)
+                }
+                .accessibilityLabel("Back to today")
+            }
+
             Text(model.noteTitle)
                 .font(.system(.subheadline, design: .monospaced).weight(.semibold))
                 .lineLimit(1)

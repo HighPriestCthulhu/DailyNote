@@ -86,6 +86,7 @@ struct MarkdownHighlighter {
              attributes: [.foregroundColor: UIColor.systemTeal], group: 0),
     ]
 
+    private static let dayHeaderRegex = rx(#"^═══ .+ ═══$"#)
     private static let headingRegex = rx(#"^(#{1,6})[ \t].*$"#)
     private static let bulletRegex = rx(#"^[ \t]*([-*+]|\d+\.)[ \t]"#)
     private static let checkboxRegex = rx(#"^[ \t]*[-*+][ \t]\[[ xX]\]"#)
@@ -98,26 +99,31 @@ struct MarkdownHighlighter {
 
     /// Restyle the whole document. Call on load, on mode toggle, and
     /// (debounced) after edits to fix multi-line constructs like frontmatter.
+    /// `frontmatterOffset` is where the live note's text begins — 0 normally,
+    /// the history boundary when previous days are prepended (their
+    /// frontmatter is stripped, so only the live note's needs dimming).
     func highlightDocument(_ storage: NSTextStorage, conceal: Bool = false,
-                           activeParagraph: NSRange? = nil) {
+                           activeParagraph: NSRange? = nil, frontmatterOffset: Int = 0) {
         let full = NSRange(location: 0, length: storage.length)
         storage.beginEditing()
         highlight(storage, in: full, conceal: conceal, activeParagraph: activeParagraph)
-        applyFrontmatter(storage)
+        applyFrontmatter(storage, at: frontmatterOffset)
         storage.endEditing()
     }
 
     /// Restyle just the paragraphs intersecting `range` — the per-keystroke
     /// and per-caret-move path.
     func highlightParagraphs(_ storage: NSTextStorage, around range: NSRange,
-                             conceal: Bool = false, activeParagraph: NSRange? = nil) {
+                             conceal: Bool = false, activeParagraph: NSRange? = nil,
+                             frontmatterOffset: Int = 0) {
         let safe = Self.clamped(range, to: storage.length)
         let paragraphs = (storage.string as NSString).paragraphRange(for: safe)
         storage.beginEditing()
         highlight(storage, in: paragraphs, conceal: conceal, activeParagraph: activeParagraph)
         // Frontmatter stays dimmed data in every mode; re-assert it whenever a
         // partial restyle touches it (setAttributes also strips concealment).
-        if let frontmatter = Self.frontmatterRange(in: storage.string) {
+        if let frontmatter = VaultFileService.frontmatterRange(in: storage.string as NSString,
+                                                               at: frontmatterOffset) {
             let overlap = NSIntersectionRange(frontmatter, paragraphs)
             if overlap.length > 0 {
                 storage.setAttributes([.font: Self.baseFont, .foregroundColor: UIColor.secondaryLabel],
@@ -149,6 +155,12 @@ struct MarkdownHighlighter {
         }
 
         // Line-level styles (list/quote markers stay visible in both modes)
+        Self.dayHeaderRegex.enumerateMatches(in: string, range: range) { match, _, _ in
+            guard let match else { return }
+            // Timeline day headers: distinct, never concealed.
+            storage.addAttributes([.font: Self.boldFont,
+                                   .foregroundColor: UIColor.secondaryLabel], range: match.range)
+        }
         Self.headingRegex.enumerateMatches(in: string, range: range) { match, _, _ in
             guard let match else { return }
             let marker = match.range(at: 1)
@@ -243,32 +255,12 @@ struct MarkdownHighlighter {
         }
     }
 
-    /// Dim the leading YAML frontmatter block (`---` … `---`). Kept visible
-    /// in both modes — it's data, not markup.
-    private func applyFrontmatter(_ storage: NSTextStorage) {
-        guard let range = Self.frontmatterRange(in: storage.string) else { return }
+    /// Dim the live note's YAML frontmatter block (`---` … `---`), starting
+    /// at `offset`. Kept visible in both modes — it's data, not markup.
+    private func applyFrontmatter(_ storage: NSTextStorage, at offset: Int) {
+        guard let range = VaultFileService.frontmatterRange(in: storage.string as NSString,
+                                                            at: offset) else { return }
         storage.setAttributes([.font: Self.baseFont, .foregroundColor: UIColor.secondaryLabel],
                               range: range)
-    }
-
-    /// Range of the leading YAML frontmatter, through its closing fence. The
-    /// closing `---` must sit alone on its line; lines like `--- draft` are
-    /// skipped and the search continues.
-    static func frontmatterRange(in text: String) -> NSRange? {
-        guard text.hasPrefix("---\n") else { return nil }
-        let ns = text as NSString
-        var searchFrom = 3
-        while searchFrom < ns.length {
-            let fence = ns.range(of: "\n---",
-                                 range: NSRange(location: searchFrom, length: ns.length - searchFrom))
-            guard fence.location != NSNotFound else { return nil }
-            var end = fence.location + fence.length
-            if end >= ns.length || ns.character(at: end) == UInt8(ascii: "\n") {
-                if end < ns.length { end += 1 } // include the newline
-                return NSRange(location: 0, length: end)
-            }
-            searchFrom = fence.location + 1
-        }
-        return nil
     }
 }

@@ -100,6 +100,102 @@ enum VaultFileService {
         return result
     }
 
+    // MARK: - History (timeline mode)
+
+    struct HistoryDay {
+        let date: Date
+        /// Filename stem, e.g. `2026-Jul-21-Tue` — used as the day header.
+        let title: String
+        /// Note text with YAML frontmatter stripped and edges trimmed.
+        let body: String
+    }
+
+    struct HistoryBatch {
+        /// Oldest-first, ready to prepend as one chunk.
+        let days: [HistoryDay]
+        /// Day before the last scanned date — where the next batch starts.
+        let nextDate: Date?
+        let reachedEnd: Bool
+    }
+
+    /// Walks backwards from `lastDay` (inclusive) collecting up to `batchSize`
+    /// existing notes. Missing days are skipped; `missLimit` consecutive
+    /// misses ends the walk. Blocking (coordinated reads) — call off-main.
+    static func readHistory(vault: URL, endingAt lastDay: Date,
+                            batchSize: Int = 5, missLimit: Int = 92) -> HistoryBatch {
+        let calendar = Calendar.current
+        var found: [HistoryDay] = [] // newest-first while collecting
+        var current = lastDay
+        var consecutiveMisses = 0
+
+        while found.count < batchSize && consecutiveMisses < missLimit {
+            let url = vault.appending(path: MomentFormat.dailyNotePath(for: current))
+            let text: String?
+            do {
+                text = try coordinatedRead(url)
+            } catch {
+                // A real read failure (offline, not yet downloaded) is not a
+                // missing day: stop this batch here and let the next batch
+                // retry from the same date, so no day is silently dropped.
+                return HistoryBatch(days: found.reversed(), nextDate: current, reachedEnd: false)
+            }
+            if let text {
+                consecutiveMisses = 0
+                var body = text
+                if let fm = frontmatterRange(in: body as NSString, at: 0) {
+                    body = ((body as NSString).substring(from: fm.location + fm.length))
+                }
+                body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+                // A note that is only frontmatter has nothing to show — a
+                // bare day header would just be noise in the timeline.
+                if !body.isEmpty {
+                    found.append(HistoryDay(date: current,
+                                            title: url.deletingPathExtension().lastPathComponent,
+                                            body: body))
+                }
+            } else {
+                consecutiveMisses += 1
+            }
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: current) else { break }
+            current = previous
+        }
+
+        let reachedEnd = consecutiveMisses >= missLimit
+        return HistoryBatch(days: found.reversed(),
+                            nextDate: reachedEnd ? nil : current,
+                            reachedEnd: reachedEnd)
+    }
+
+    /// Range of a YAML frontmatter block starting exactly at `offset`
+    /// (`---` fence through the closing fence's newline). The closing `---`
+    /// must sit alone on its line; lines like `--- draft` are skipped and the
+    /// search continues. Canonical implementation — the highlighter delegates
+    /// here so display and storage agree on what frontmatter is.
+    static func frontmatterRange(in text: NSString, at offset: Int) -> NSRange? {
+        let lf = unichar(0x0A), cr = unichar(0x0D)
+        // Opening fence: "---" followed by \n or \r\n.
+        guard offset >= 0, offset + 3 <= text.length,
+              text.substring(with: NSRange(location: offset, length: 3)) == "---" else { return nil }
+        var bodyStart = offset + 3
+        if bodyStart < text.length, text.character(at: bodyStart) == cr { bodyStart += 1 }
+        guard bodyStart < text.length, text.character(at: bodyStart) == lf else { return nil }
+
+        var searchFrom = bodyStart
+        while searchFrom < text.length {
+            let fence = text.range(of: "\n---",
+                                   range: NSRange(location: searchFrom, length: text.length - searchFrom))
+            guard fence.location != NSNotFound else { return nil }
+            var end = fence.location + fence.length
+            if end < text.length, text.character(at: end) == cr { end += 1 }
+            if end >= text.length || text.character(at: end) == lf {
+                if end < text.length { end += 1 } // include the line break
+                return NSRange(location: offset, length: end - offset)
+            }
+            searchFrom = fence.location + 1
+        }
+        return nil
+    }
+
     /// Best-effort check used only to pick the loading message.
     static func isLikelyNotDownloaded(_ url: URL) -> Bool {
         guard let values = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]),

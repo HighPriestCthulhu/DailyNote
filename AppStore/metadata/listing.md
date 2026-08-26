@@ -54,6 +54,9 @@ AN EDITOR THAT KEEPS UP
   Return on an empty item ends the list.
 • Optional line timestamps: flip the clock toggle and every new line starts
   with the time — perfect for logging a day as it happens.
+• Timeline: pull down to reveal yesterday, then keep scrolling back through
+  your whole journal. Past days are read-only and beautifully separated;
+  today stays editable at the bottom. One tap returns to today.
 • Autosaves as you type and the instant you switch away.
 
 BUILT FOR TRUST

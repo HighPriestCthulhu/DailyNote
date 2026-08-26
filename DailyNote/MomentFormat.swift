@@ -29,7 +29,10 @@ enum MomentFormat {
     private static func formatter(icu: String) -> DateFormatter {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        if let cached = formatterCache[icu] { return cached }
+        if let cached = formatterCache[icu] {
+            cached.timeZone = .current // don't pin the launch timezone for the session
+            return cached
+        }
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.calendar = Calendar(identifier: .gregorian)
