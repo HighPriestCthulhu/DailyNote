@@ -1,10 +1,10 @@
-# App Store Listing — DailyNote
+# App Store Listing — Instant Daily
 
 ## Identity
 
 | Field | Value |
 |---|---|
-| App name (30 chars max) | DailyNote – Today's Note |
+| App name (30 chars max) | Instant Daily |
 | Subtitle (30 chars max) | Instant markdown daily notes |
 | Bundle ID | com.alex.dailynote |
 | SKU | dailynote-001 |
@@ -13,8 +13,8 @@
 | Age rating | 4+ (no objectionable content) |
 | Price | Free |
 
-*App Store names must be unique — if "DailyNote – Today's Note" is taken, fallbacks:
-"DailyNote for Obsidian Vaults" (28), "Today's Note – Fast Journal" (27).
+*App Store names must be unique — if "Instant Daily" is taken, fallbacks:
+"Instant Daily – Today's Note" (28), "Instant Daily Notes" (19).
 Avoid leading with "Obsidian" — Apple can flag third-party trademarks in names;
 it's fine inside the description.*
 
@@ -25,16 +25,16 @@ iCloud vault — no launch delay, no taps, just type.
 
 ## Description (4000 chars max)
 
-DailyNote does one thing: it opens today's daily note the moment you launch it.
+Instant Daily does one thing: it opens today's daily note the moment you launch it.
 
 If you keep markdown daily notes in an iCloud Drive folder — for example an
 Obsidian vault — you know the frustration: you have one sentence in your head,
 and by the time your note app has launched, indexed, and animated, the thought
-is gone. DailyNote is the antidote. Cold launch to blinking cursor in under a
+is gone. Instant Daily is the antidote. Cold launch to blinking cursor in under a
 second: today's note open, keyboard up, cursor at the end.
 
 HOW IT WORKS
-• Pick your notes folder once. DailyNote works directly on the same markdown
+• Pick your notes folder once. Instant Daily works directly on the same markdown
   files — nothing is imported, converted, or locked in.
 • If today's note exists, it opens. If it doesn't, it's created from your
   daily-note template, with dates, tags, and links filled in.
@@ -60,13 +60,13 @@ AN EDITOR THAT KEEPS UP
 • Autosaves as you type and the instant you switch away.
 
 BUILT FOR TRUST
-• Your notes stay in your folder, in plain markdown. DailyNote never uploads,
+• Your notes stay in your folder, in plain markdown. Instant Daily never uploads,
   collects, or analyzes anything. No account, no tracking, no network calls.
-• Safe alongside sync: DailyNote coordinates file access, never overwrites a
+• Safe alongside sync: Instant Daily coordinates file access, never overwrites a
   note that exists elsewhere, and rolls to the new day automatically.
 
-DailyNote is a companion, not a replacement: your main notes app is great at
-linking, searching, and organizing. DailyNote is great at the two seconds a
+Instant Daily is a companion, not a replacement: your main notes app is great at
+linking, searching, and organizing. Instant Daily is great at the two seconds a
 day when you just need to write something down. Now.
 
 ## Keywords (100 chars max, comma-separated)
@@ -91,5 +91,5 @@ obsidian,daily note,journal,diary,markdown,quick capture,note,icloud,vault,times
 ## What's New (v1.0)
 
 Initial release: instant access to today's daily note, template-based note
-creation, live markdown styling, reading mode, smart lists, and optional line
-timestamps.
+creation, live markdown styling, reading mode, smart lists, optional line
+timestamps, and timeline mode — pull down to scroll back through previous days.
