@@ -157,7 +157,7 @@ struct ContentView: View {
     private func folderPrompt(_ message: String?) -> some View {
         VStack(spacing: 16) {
             Spacer()
-            Text("DailyNote")
+            Text("Instant Daily")
                 .font(.system(.title2, design: .monospaced).weight(.bold))
             Text("Pick your vault folder once — the one\nholding your daily notes (e.g. Browse ▸ Obsidian ▸ your vault).")
                 .font(.subheadline)
